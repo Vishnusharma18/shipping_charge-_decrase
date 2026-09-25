@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "ecomwithnabeel",
-  "version": "7.2",
-  "description": "FAST: Parallel generation + smart shipping capture \u2014 lowest shipping auto-selected",
+  "name": "Vishnu Shipping Optimizer",
+  "version": "8.0",
+  "description": "FAST: Parallel generation + smart shipping capture — target shipping under 10s",
   "permissions": [
     "activeTab",
     "scripting",

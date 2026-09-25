@@ -1,19 +1,18 @@
-// Background service worker for ecomwithnabeel Meesho Shipping Optimizer
+// Background service worker for Vishnu Meesho Shipping Optimizer
 
 chrome.runtime.onInstalled.addListener(() => {
-  console.log('[Meesho Optimizer] Extension installed');
+  console.log("[Vishnu Optimizer] Extension installed");
 });
 
-// Handle messages between popup and content script
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  if (request.action === 'openPopup') {
+  if (request.action === "openPopup") {
     chrome.action.openPopup();
     return;
   }
-  if (request.action === 'testVariant') {
+  if (request.action === "testVariant") {
     handleVariantTest(request.tabId, request.dataUrl)
-      .then(result => sendResponse(result))
-      .catch(err => sendResponse({ error: err.message }));
+      .then((result) => sendResponse(result))
+      .catch((err) => sendResponse({ error: err.message }));
     return true;
   }
 });
@@ -23,30 +22,31 @@ async function handleVariantTest(tabId, dataUrl) {
     const results = await chrome.scripting.executeScript({
       target: { tabId },
       func: async (imgData) => {
-        const input = document.querySelector('input[data-testid="changeFrontImage"]') ||
-                      document.querySelector('#changeFrontImage');
+        const input =
+          document.querySelector('input[data-testid="changeFrontImage"]') ||
+          document.querySelector("#changeFrontImage");
 
-        if (!input) return { shipping: null, error: 'No input found' };
+        if (!input) return { shipping: null, error: "No input found" };
 
         const res = await fetch(imgData);
         const blob = await res.blob();
-        const file = new File([blob], 'test.jpg', { type: 'image/jpeg' });
+        const file = new File([blob], "test.jpg", { type: "image/jpeg" });
         const dt = new DataTransfer();
         dt.items.add(file);
         input.files = dt.files;
-        input.dispatchEvent(new Event('change', { bubbles: true }));
+        input.dispatchEvent(new Event("change", { bubbles: true }));
 
-        await new Promise(r => setTimeout(r, 4000));
+        await new Promise((r) => setTimeout(r, 1200));
 
-        // Read shipping
-        const shippingEl = document.querySelector('[data-mls-applied]');
-        const val = shippingEl ? parseInt(shippingEl.getAttribute('data-mls-applied')) : null;
+        const shippingEl = document.querySelector("[data-mls-applied]");
+        const val = shippingEl
+          ? parseInt(shippingEl.getAttribute("data-mls-applied"))
+          : null;
 
-        // Also try text-based
         if (!val) {
-          const allEls = document.querySelectorAll('p,span,h4');
+          const allEls = document.querySelectorAll("p,span,h4");
           for (const el of allEls) {
-            if (el.textContent.includes('Shipping')) {
+            if (el.textContent.includes("Shipping")) {
               const m = el.textContent.match(/₹(\d+)/);
               if (m) return { shipping: parseInt(m[1]) };
             }
@@ -55,7 +55,7 @@ async function handleVariantTest(tabId, dataUrl) {
 
         return { shipping: val };
       },
-      args: [dataUrl]
+      args: [dataUrl],
     });
 
     return results[0]?.result || { shipping: null };

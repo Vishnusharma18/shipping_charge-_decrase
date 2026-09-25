@@ -15,16 +15,15 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 });
 
-// ─── Inject ecomwithnabeel Button near bankSettlementContainer ──────────────────────
-function injectAdeebRanaButton() {
-  // Already injected?
-  if (document.getElementById('ecomeasy-btn-wrap')) return;
+// ─── Inject Vishnu button near bankSettlementContainer ──────────────────────
+function injectVishnuButton() {
+  if (document.getElementById('vishnu-btn-wrap')) return;
 
   const container = document.querySelector('[data-testid="bankSettlementContainer"]');
   if (!container) return;
 
   const wrap = document.createElement('div');
-  wrap.id = 'ecomeasy-btn-wrap';
+  wrap.id = 'vishnu-btn-wrap';
   wrap.style.cssText = `
     display: flex;
     justify-content: center;
@@ -32,7 +31,7 @@ function injectAdeebRanaButton() {
   `;
 
   wrap.innerHTML = `
-    <button id="ecomeasy-glow-btn" style="
+    <button id="vishnu-glow-btn" style="
       display: flex;
       align-items: center;
       gap: 8px;
@@ -46,17 +45,17 @@ function injectAdeebRanaButton() {
       cursor: pointer;
       font-family: sans-serif;
       box-shadow: 0 0 12px #a855f7, 0 0 24px #FF3CAC55;
-      animation: ecomeasy-pulse 2s infinite;
+      animation: vishnu-pulse 2s infinite;
       letter-spacing: 0.3px;
       white-space: nowrap;
     ">
       <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="white">
         <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
       </svg>
-      AI Shipping Optimise — ecomwithnabeel
+      AI Shipping Optimise — Vishnu
     </button>
     <style>
-      @keyframes ecomeasy-pulse {
+      @keyframes vishnu-pulse {
         0%   { box-shadow: 0 0 8px #a855f7, 0 0 18px #FF3CAC55; }
         50%  { box-shadow: 0 0 18px #a855f7, 0 0 36px #FF3CAC99, 0 0 52px #6C0FFF44; }
         100% { box-shadow: 0 0 8px #a855f7, 0 0 18px #FF3CAC55; }
@@ -64,23 +63,19 @@ function injectAdeebRanaButton() {
     </style>
   `;
 
-  // Insert before the container
   container.parentNode.insertBefore(wrap, container);
 
-  document.getElementById('ecomeasy-glow-btn').addEventListener('click', () => {
+  document.getElementById('vishnu-glow-btn').addEventListener('click', () => {
     chrome.runtime.sendMessage({ action: 'openPopup' });
   });
 }
 
-// Watch for bankSettlementContainer to appear (React renders it dynamically)
 const observer = new MutationObserver(() => {
-  injectAdeebRanaButton();
+  injectVishnuButton();
 });
 observer.observe(document.body, { childList: true, subtree: true });
 
-// Also try immediately on load
-injectAdeebRanaButton();
-
+injectVishnuButton();
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function triggerReactInputChange(element, value) {
   const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
@@ -143,15 +138,15 @@ async function uploadImageToMeesho(dataUrl) {
     input.dispatchEvent(new Event('change', { bubbles: true }));
     input.dispatchEvent(new Event('input',  { bubbles: true }));
 
-    await new Promise(r => setTimeout(r, 3000));
+    await new Promise(r => setTimeout(r, 500));
     await prickPriceField();
-    await new Promise(r => setTimeout(r, 2000));
+    await new Promise(r => setTimeout(r, 300));
 
     let shipping = null;
-    for (let attempt = 0; attempt < 5; attempt++) {
+    for (let attempt = 0; attempt < 4; attempt++) {
       shipping = readShippingFromPage();
       if (shipping !== null) break;
-      await new Promise(r => setTimeout(r, 800));
+      await new Promise(r => setTimeout(r, 200));
       if (attempt % 2 === 1) await prickPriceField();
     }
 
@@ -189,4 +184,4 @@ function readShippingFromPage() {
 }
 
 window.__meeshoOptimizerReady = true;
-console.log('[ecomwithnabeel] Content script loaded');
+console.log('[Vishnu] Content script loaded');
