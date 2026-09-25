@@ -343,21 +343,61 @@ function applyGradientToCanvas(ctx, gradStr, size) {
   ctx.fillRect(0, 0, size, size);
 }
 
-// ─── Shipping Test — original fast flow + stale-value protection ─────────────
+// ─── Ensure content script is alive on the Meesho tab ─────────────────────────
+async function ensureContentReady(tabId) {
+  try {
+    const ping = await chrome.tabs.sendMessage(tabId, { action: "ping" });
+    if (ping && ping.alive) return ping;
+  } catch (_) {
+    /* inject below */
+  }
+
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ["content.js"],
+    });
+    await new Promise((r) => setTimeout(r, 200));
+    return await chrome.tabs.sendMessage(tabId, { action: "ping" });
+  } catch (err) {
+    return { alive: false, error: err.message };
+  }
+}
+
+// ─── Shipping Test — content-script path (reliable) ───────────────────────────
 async function getShippingForVariant(variantDataUrl, tabId) {
+  try {
+    const result = await chrome.tabs.sendMessage(tabId, {
+      action: "uploadImage",
+      dataUrl: variantDataUrl,
+    });
+    if (result && result.shipping != null && Number.isFinite(Number(result.shipping))) {
+      return Number(result.shipping);
+    }
+    // If upload failed with a reason, surface null but log it
+    if (result && result.error) {
+      console.warn("[Vishnu Shipping]", result.error);
+    }
+    return result && result.shipping != null ? Number(result.shipping) : null;
+  } catch (err) {
+    console.warn("[Vishnu Shipping] content message failed, fallback inject:", err);
+    return getShippingForVariantFallback(variantDataUrl, tabId);
+  }
+}
+
+async function getShippingForVariantFallback(variantDataUrl, tabId) {
   return new Promise((resolve) => {
     chrome.scripting.executeScript(
       {
         target: { tabId },
         func: async (imgData) => {
-          function norm(str) {
-            return String(str || "")
+          function extractAmt(txt) {
+            const t = String(txt || "")
               .replace(/[\u00a0\u202f\u2009\u2007]/g, " ")
               .trim();
-          }
-
-          function extractAmt(txt) {
-            const match = norm(txt).match(/₹\s*(\d+)/);
+            const match =
+              t.match(/(?:₹|Rs\.?\s*|INR\s*)(\d{1,4})/i) ||
+              t.match(/(\d{1,4})\s*(?:₹|Rs\.?)/i);
             if (!match) return null;
             const v = parseInt(match[1], 10);
             return v > 0 && v < 5000 ? v : null;
@@ -369,34 +409,12 @@ async function getShippingForVariant(variantDataUrl, tabId) {
               const v = parseInt(mlsEl.getAttribute("data-mls-applied"), 10);
               if (Number.isFinite(v) && v > 0) return v;
             }
-
-            // Exact Meesho text used by the original extension.
-            for (const el of document.querySelectorAll("p")) {
-              const t = norm(el.textContent);
-              if (/shipping/i.test(t) && /added separately/i.test(t)) {
-                const v = extractAmt(t);
-                if (v !== null) return v;
-              }
-            }
-
-            for (const sel of [
-              '[class*="shipping"]',
-              '[class*="Shipping"]',
-              '[id*="shipping"]',
-              '[data-testid*="shipping"]',
-            ]) {
-              for (const el of document.querySelectorAll(sel)) {
-                const v = extractAmt(el.textContent);
-                if (v !== null) return v;
-              }
-            }
-
             for (const el of document.querySelectorAll(
-              "p,span,div,h4,h5,h6,td,li",
+              "p,span,div,h4,h5,h6,td,li,label",
             )) {
-              if (el.children.length > 3) continue;
-              const txt = norm(el.textContent);
-              if (txt.length > 80) continue;
+              if (el.children.length > 4) continue;
+              const txt = (el.textContent || "").trim();
+              if (txt.length > 120) continue;
               if (/shipping/i.test(txt)) {
                 const v = extractAmt(txt);
                 if (v !== null) return v;
@@ -412,30 +430,23 @@ async function getShippingForVariant(variantDataUrl, tabId) {
                 'input[aria-describedby="meesho_price-helper-text"]',
               ) ||
               document.querySelector('input[name="meesho_price"]');
-            if (!priceInput || !priceInput.value.trim()) return;
-
+            if (!priceInput) return;
             const setter = Object.getOwnPropertyDescriptor(
               window.HTMLInputElement.prototype,
               "value",
             ).set;
-            const originalVal = priceInput.value;
-            const originalNum = parseFloat(originalVal);
-            if (!Number.isFinite(originalNum)) return;
-
-            const tempVal = String(
-              originalNum > 1 ? originalNum - 1 : originalNum + 1,
-            );
-            priceInput.dispatchEvent(
-              new FocusEvent("focus", { bubbles: true }),
-            );
+            const originalVal = (priceInput.value || "").trim() || "100";
+            const base = parseFloat(originalVal) || 100;
+            const tempVal = String(base > 1 ? base - 1 : base + 1);
+            priceInput.focus();
             setter.call(priceInput, tempVal);
             priceInput.dispatchEvent(new Event("input", { bubbles: true }));
             priceInput.dispatchEvent(new Event("change", { bubbles: true }));
-            await new Promise((r) => setTimeout(r, 40));
-            setter.call(priceInput, originalVal);
+            await new Promise((r) => setTimeout(r, 120));
+            setter.call(priceInput, String(base));
             priceInput.dispatchEvent(new Event("input", { bubbles: true }));
             priceInput.dispatchEvent(new Event("change", { bubbles: true }));
-            priceInput.dispatchEvent(new FocusEvent("blur", { bubbles: true }));
+            priceInput.blur();
           }
 
           const input =
@@ -447,7 +458,6 @@ async function getShippingForVariant(variantDataUrl, tabId) {
             return { shipping: null, error: "Upload input not found" };
 
           const oldShipping = readShipping();
-
           const res = await fetch(imgData);
           const blob = await res.blob();
           const file = new File([blob], "test_variant.jpg", {
@@ -460,18 +470,16 @@ async function getShippingForVariant(variantDataUrl, tabId) {
             "files",
           ).set;
           fileSetter.call(input, dt.files);
-          input.dispatchEvent(new Event("change", { bubbles: true }));
           input.dispatchEvent(new Event("input", { bubbles: true }));
+          input.dispatchEvent(new Event("change", { bubbles: true }));
 
-          // Fast path: ~0.8–1.2s per variant so whole search fits in ≤10s.
-          await new Promise((r) => setTimeout(r, 350));
+          await new Promise((r) => setTimeout(r, 900));
           await triggerPrice();
-          await new Promise((r) => setTimeout(r, 80));
+          await new Promise((r) => setTimeout(r, 250));
 
-          const deadline = Date.now() + 900;
+          const deadline = Date.now() + 2800;
           let lastValue = null;
           let stableSince = Date.now();
-
           while (Date.now() < deadline) {
             const value = readShipping();
             if (value !== null) {
@@ -479,31 +487,33 @@ async function getShippingForVariant(variantDataUrl, tabId) {
                 lastValue = value;
                 stableSince = Date.now();
               }
-
               if (oldShipping === null || value !== oldShipping) {
                 return { shipping: value };
               }
-
-              if (Date.now() - stableSince >= 220) {
+              if (Date.now() - stableSince >= 450) {
                 return { shipping: value };
               }
             }
-            await new Promise((r) => setTimeout(r, 50));
+            await new Promise((r) => setTimeout(r, 120));
           }
-
           return { shipping: readShipping() };
         },
         args: [variantDataUrl],
       },
       (execResults) => {
+        if (chrome.runtime.lastError) {
+          console.warn("[Vishnu Shipping]", chrome.runtime.lastError.message);
+          resolve(null);
+          return;
+        }
         const r = execResults && execResults[0] && execResults[0].result;
-        resolve(r ? r.shipping : null);
+        resolve(r && r.shipping != null ? r.shipping : null);
       },
     );
   });
 }
 
-// ─── Target Search Flow — continuous, fast batches, stop immediately on hit ───
+// ─── Target Search — reliable shipping capture ────────────────────────────────
 async function startTargetSearch() {
   if (!uploadedFile || running) return;
 
@@ -522,12 +532,29 @@ async function startTargetSearch() {
     return;
   }
 
+  const ready = await ensureContentReady(targetTab.id);
+  if (!ready || !ready.alive) {
+    showStatus(
+      "⚠️ Meesho page se connect nahi hua. Page refresh karke extension reload karo.",
+      "error",
+    );
+    return;
+  }
+  if (!ready.hasUpload) {
+    showStatus(
+      "⚠️ Image upload box nahi mila. Catalog Add/Edit product page kholo (jahan front image change hota hai).",
+      "error",
+    );
+    return;
+  }
+
   running = true;
   variantCounter = 0;
   generatedVariants = [];
   results = [];
 
-  const SEARCH_BUDGET_MS = 10000;
+  // Enough time for ~5–6 real Meesho shipping reads (~2.5–3.5s each)
+  const SEARCH_BUDGET_MS = 22000;
   const searchStartedAt = Date.now();
   const timeLeft = () => SEARCH_BUDGET_MS - (Date.now() - searchStartedAt);
 
@@ -540,12 +567,11 @@ async function startTargetSearch() {
   document.getElementById("resultsSection").classList.remove("visible");
   document.getElementById("resultsGrid").innerHTML = "";
   showStatus(
-    `🎯 Target: ₹${target.min}${target.max === null ? "+" : "–₹" + target.max} — fast search (≤10s)...`,
+    `🎯 Target: ₹${target.min}${target.max === null ? "+" : "–₹" + target.max} — searching...`,
     "",
   );
 
-  // Small parallel batch so generation + tests fit inside 10s.
-  const BATCH_SIZE = 8;
+  const BATCH_SIZE = 6;
 
   function pickBestNearTarget() {
     const scored = results.filter((r) => r.shipping !== null);
@@ -563,8 +589,9 @@ async function startTargetSearch() {
   reader.onload = async (ev) => {
     const originalDataUrl = ev.target.result;
     let foundHit = false;
+    let nullStreak = 0;
     try {
-      while (running && timeLeft() > 600) {
+      while (running && timeLeft() > 800) {
         const batchStart = variantCounter + 1;
         const indexes = Array.from(
           { length: BATCH_SIZE },
@@ -574,7 +601,7 @@ async function startTargetSearch() {
         updateProgress(
           variantCounter,
           Math.max(variantCounter + 1, batchStart + BATCH_SIZE - 1),
-          `🎨 Generating ${BATCH_SIZE} candidates... (${Math.max(0, Math.ceil(timeLeft() / 1000))}s left)`,
+          `🎨 Generating candidates... (${Math.max(0, Math.ceil(timeLeft() / 1000))}s left)`,
         );
 
         const batch = await Promise.all(
@@ -585,7 +612,7 @@ async function startTargetSearch() {
         generatedVariants.push(...batch);
 
         for (const variant of batch) {
-          if (!running || timeLeft() < 500) break;
+          if (!running || timeLeft() < 800) break;
 
           variantCounter = variant.index;
           updateProgress(
@@ -615,13 +642,27 @@ async function startTargetSearch() {
           });
 
           if (shipping === null) {
+            nullStreak++;
             showStatus(
-              `⏳ Variant #${variant.index}: shipping detect nahi hui — next...`,
+              `⏳ Variant #${variant.index}: shipping wait... (retry)`,
               "",
             );
+            // After 2 nulls, re-check page readiness once
+            if (nullStreak === 2) {
+              const again = await ensureContentReady(targetTab.id);
+              if (again && !again.hasUpload) {
+                showStatus(
+                  "⚠️ Upload box gayab. Catalog edit page pe raho.",
+                  "error",
+                );
+                running = false;
+                break;
+              }
+            }
             continue;
           }
 
+          nullStreak = 0;
           const numericShipping = Number(shipping);
           const hit = isTargetShipping(numericShipping, target);
           showStatus(
@@ -638,7 +679,7 @@ async function startTargetSearch() {
           }
         }
 
-        if (foundHit || !running || timeLeft() < 500) break;
+        if (foundHit || !running || timeLeft() < 800) break;
       }
 
       if (!foundHit) {
@@ -654,7 +695,7 @@ async function startTargetSearch() {
           );
         } else {
           showStatus(
-            "⚠️ 10s mein shipping detect nahi hui. Page refresh karke dobara try karo.",
+            "⚠️ Shipping read nahi hui. Confirm karo: catalog Add/Edit page open hai, price filled hai, front image box dikh raha hai — phir page refresh + extension Reload.",
             "error",
           );
         }
